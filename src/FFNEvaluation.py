@@ -235,44 +235,42 @@ def runSample(onnxModel, numInputs, numOutputs, inputRange, tAndOT, spec, inpDty
     target = tAndOT[0]
     objectiveType = tAndOT[1]
     all_advinps = []
+    all_nonadvinps = []
     found_adv = False
 
-    # Run FFN for numRuns
     for k in range(numRuns):
         samples = []
         posSamples = []
         negSamples = []
 
         ret, advinps = makeSample(onnxModel, numInputs, inputRange, samples, spec, inpDtype, inpShape)
-        
-        # If adversarial inputs found, accumulate them
         if ret and advinps:
             found_adv = True
             all_advinps.extend(advinps)
 
-        # Segregate sample list into positive and negative samples
         if (objectiveType == 1):
-           checkAndSegregateSamplesForMinimization(posSamples, negSamples, samples, oldPosSamples, target)
+            checkAndSegregateSamplesForMinimization(posSamples, negSamples, samples, oldPosSamples, target)
         else:
-           checkAndSegregateSamplesForMaximization(posSamples, negSamples, samples, oldPosSamples, target)
+            checkAndSegregateSamplesForMaximization(posSamples, negSamples, samples, oldPosSamples, target)
         oldPosSamples = posSamples
 
-        # Check if further sampling is possible
+        # Collect non-adversarial inputs (negSamples)
+        for s in negSamples:
+            all_nonadvinps.append(s[0])
+
         flag = False
         for i in range(numInputs):
             if (inputRange[i][1] - inputRange[i][0] > 0.000001):
-               flag = True
-               break
+                flag = True
+                break
 
-        if (flag == False):
-           return "unknown" if not found_adv else "violated", all_advinps
+        if not flag:
+            return ("unknown" if not found_adv else "violated", all_advinps, all_nonadvinps)
 
         learning(posSamples, negSamples, inputRange, numInputs)
-    
-    return "timeout" if not found_adv else "violated", all_advinps
 
+    return ("timeout" if not found_adv else "violated", all_advinps, all_nonadvinps)
 
-#SampleEval function
 def sampleEval(onnxFilename, vnnlibFilename):
     onnxModel = onnx.load(onnxFilename)
     onnx.checker.check_model(onnxModel, full_check=True)
@@ -292,6 +290,7 @@ def sampleEval(onnxFilename, vnnlibFilename):
     targetAndType = findObjectiveFuncionType(boxSpecList[0][1], numOutputs)
 
     all_advinps = []
+    all_nonadvinps = []
     returnStatus = "timeout"
 
     for i in range(len(boxSpecList)):
@@ -299,12 +298,14 @@ def sampleEval(onnxFilename, vnnlibFilename):
         inRanges = boxSpec[0]
         specList = boxSpec[1]
         random.seed()
-        returnStatus, advinps = runSample(onnxModel, numInputs, numOutputs, inRanges, targetAndType, specList, inpDtype, inpShape)
+        returnStatus, advinps, nonadvinps = runSample(
+            onnxModel, numInputs, numOutputs, inRanges, targetAndType, specList, inpDtype, inpShape
+        )
         all_advinps.extend(advinps)
+        all_nonadvinps.extend(nonadvinps)
         if returnStatus == "violated":
-            # Continue collecting, do not return early
             pass
-    return returnStatus, all_advinps
+    return returnStatus, all_advinps, all_nonadvinps
 
 
 

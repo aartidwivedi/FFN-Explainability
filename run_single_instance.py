@@ -1,5 +1,6 @@
 import sys
 import time
+import signal
 import signal_windows as signal #modified for windows
 import argparse
 
@@ -7,6 +8,14 @@ from src.FFNEvaluation import sampleEval, supersats, superunsats
 
 # Global variable for timeout
 system_timeout = 60.0  # Default value
+
+
+def searchInList(inputList, input):
+    'Search for input in inputList'
+    for i in inputList:
+        if i == input:
+            return True
+    return False
 
 # Register an handler for the timeout
 def handler(signum, frame):
@@ -19,8 +28,8 @@ def runSingleInstanceForAllCategory(onnxFile, vnnlibFile, timeout_val):
    local_timeout = float(timeout_val)
    
    try:
-       retStatus = runSingleInstance(onnxFile, vnnlibFile, local_timeout)
-       return retStatus
+       retStatus, retStatus_nonadv = runSingleInstance(onnxFile, vnnlibFile, local_timeout)
+       return retStatus, retStatus_nonadv
    except Exception as exc:
        print(exc)
        return "timeout," + str(local_timeout) + "\n"
@@ -33,6 +42,7 @@ def runSingleInstance(onnxFile, vnnlibFile, timeout_duration=None):
    # Variable Initialization
    startTime = time.time()
    all_adv_inputs = []
+   all_non_adv_inputs = []
    
    onnxFileName = onnxFile.split('/')[-1]
    vnnFileName = vnnlibFile.split('/')[-1]
@@ -49,33 +59,48 @@ def runSingleInstance(onnxFile, vnnlibFile, timeout_duration=None):
       #  print(f"Starting iteration {iteration}, remaining time: {end_time - time.time():.2f}s")
        
        # Call sampleEval to find adversarial inputs
-       status, adv_inputs = sampleEval(onnxFile, vnnlibFile)
+       status, adv_inputs, non_adv_inputs = sampleEval(onnxFile, vnnlibFile)
        
        # Add any found adversarial inputs to our collection
        if adv_inputs and len(adv_inputs) > 0:
            for inp in adv_inputs:
                if inp not in all_adv_inputs:
                    all_adv_inputs.append(inp)
-                  #  print(f"Found new adversarial input: {inp}")
+                   #  print(f"Found new adversarial input: {inp}")
+       # Always add non-adversarial inputs as well
+       if non_adv_inputs and len(non_adv_inputs) > 0:
+           for inp in non_adv_inputs:
+               if inp not in all_non_adv_inputs:
+                   all_non_adv_inputs.append(inp)
+                  #  print(f"Found new non-adversarial input: {inp}")
    
    # Calculate total time used
    timeElapsed = time.time() - startTime
    
    # Prepare result string
-   result = "" #f"Testing network model {onnxFileName} for property file {vnnFileName}\n"
-   
+   result = ""
+   result_nonadv = "Non-adversarial inputs found:\n"
+
+   # Write adversarial inputs, avoiding duplicates
+   written_adv = []
    if all_adv_inputs:
        result += f"Status: violated\n"
-      #  result += f"Time elapsed: {timeElapsed:.4f} seconds\n"
-      #  result += f"Total iterations completed: {iteration}\n"
-      #  result += f"Input Space checked: {len(supersats) + len(superunsats)}\n"
-       result += f"Adversarial inputs found: {all_adv_inputs}\n"
+       result += f"Adversarial inputs found:\n"
+       for inp in all_adv_inputs:
+           if inp not in written_adv:
+               result += f"  {inp}\n"
+               written_adv.append(inp)
    else:
        result += f"Status: timeout\n"
-      #  result += f"Time elapsed: {timeElapsed:.4f} seconds\n"
-      #  result += f"Total iterations completed: {iteration}\n"
-   
-   return result
+
+   # Write non-adversarial inputs, avoiding duplicates
+   written_nonadv = []
+   for inp in all_non_adv_inputs:
+       if inp not in written_nonadv:
+           result_nonadv += f"  {inp}\n"
+           written_nonadv.append(inp)
+
+   return result, result_nonadv
 
 
 #Main function
@@ -146,17 +171,23 @@ if __name__ == '__main__':
    '"runSingleInstance" will continue until any adversarial found or timeout occurs'
    'When timeout occurs codes written within exception will be executed'
    outFile = open(resultFile, "w")
+   outFile_nonadv = open(resultFile + "_nonadv", "w")
    try:
        # Run for the full timeout period
-       retStatus = runSingleInstance(onnxFile, vnnlibFile, cmd_timeout)
-       
+       retStatus, retStatus_nonadv = runSingleInstance(onnxFile, vnnlibFile, cmd_timeout)
+
        # Write results to file
        outFile.write(retStatus)
+       outFile_nonadv.write(retStatus_nonadv)
        print("\nOutput is written in - \"{0}\"".format(resultFile))
+       print("\nOutput is written in - \"{0}_nonadv\"".format(resultFile+ "_nonadv"))
    except Exception as exc:
        print(exc)
        outFile.write("timeout," + str(cmd_timeout) + "\n")
+       outFile_nonadv.write("timeout," + str(cmd_timeout) + "\n")
        print("\nOutput is written in - \"{0}\"".format(resultFile))
+       print("\nOutput is written in - \"{0}_nonadv\"".format(resultFile+ "_nonadv"))
        print("\n!!! Timeout occurred after {0} seconds".format(cmd_timeout))
    
    outFile.close()
+   outFile_nonadv.close()
